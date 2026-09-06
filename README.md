@@ -18,7 +18,7 @@
 
 ## 🧠 About Me
 
-I'm a software engineer passionate about **GenAI, agentic systems, and backend engineering**. Currently at **Deloitte**, I build AI agents using **Google ADK** and orchestrate multi-agent workflows that cut manual engineering effort by ~60%. I enjoy turning complex AI research into production-grade systems.
+I'm a software engineer passionate about **GenAI, agentic systems, and backend engineering**. Currently at **Deloitte**, I build AI agents using **Google ADK** and orchestrate multi-agent workflow[...]
 
 - 🤖 Building **agentic AI workflows** at Deloitte using Django & Google Gemini
 - 🐍 Backend engineering with **Python, Django & Django REST Framework**
@@ -109,6 +109,13 @@ A full-stack platform that connects students to relevant job and internship oppo
   <img src="https://github-readme-stats.vercel.app/api?username=Shivam07042004&show_icons=true&theme=tokyonight&hide_border=true" height="165"/>
   <img src="https://github-readme-stats.vercel.app/api/top-langs/?username=Shivam07042004&layout=compact&theme=tokyonight&hide_border=true" height="165"/>
 </p>
+
+---
+
+## Contributions (live)
+
+🔒 Private repositories contributed to: <!--PRIVATE_REPOS_COUNT-->0<!--END_PRIVATE_REPOS_COUNT-->
+🌐 Public repositories contributed to: <!--PUBLIC_REPOS_COUNT-->0<!--END_PUBLIC_REPOS_COUNT-->
 
 ---
 
