@@ -13,7 +13,6 @@
         exit 1
       fi
 
-      # Build JSON payload safely (no heredoc)
       PAYLOAD="{\"query\":\"query{ user(login: \\\"${GITHUB_USER}\\\") { private: repositoriesContributedTo(privacy:PRIVATE) { totalCount } public: repositoriesContributedTo(privacy:PUBLIC) { totalCount } } }\"}"
 
       resp=$(curl -s -H "Authorization: bearer $TOKEN" -X POST -d "$PAYLOAD" https://api.github.com/graphql)
