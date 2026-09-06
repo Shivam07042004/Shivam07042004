@@ -52,4 +52,3 @@
         git add README.md
         git commit -m "chore: update public/private repo contribution counts"
         git push
-      fi
