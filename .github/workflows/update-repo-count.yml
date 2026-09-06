@@ -1,67 +1,55 @@
-name: Update repo contribution counts
+  - name: Ensure jq is installed
+    run: |
+      sudo apt-get update
+      sudo apt-get install -y jq
 
-on:
-  schedule:
-    - cron: '0 6 * * *'   # daily at 06:00 UTC
-  workflow_dispatch:
-
-jobs:
-  update-counts:
-    runs-on: ubuntu-latest
+  - name: Query GitHub GraphQL for public/private repositories contributed count
     env:
-      GITHUB_USER: "Shivam07042004"
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      TOKEN: ${{ secrets.PERSONAL_TOKEN }}
+      GITHUB_USER: ${{ env.GITHUB_USER }}
+    run: |
+      if [ -z "$TOKEN" ]; then
+        echo "ERROR: secret PERSONAL_TOKEN is not set"
+        exit 1
+      fi
 
-      - name: Query GitHub GraphQL for public/private repositories contributed count
-        env:
-          TOKEN: ${{ secrets.PERSONAL_TOKEN }}
-          GITHUB_USER: ${{ env.GITHUB_USER }}
-        run: |
-          if [ -z "$TOKEN" ]; then
-            echo "ERROR: secret PERSONAL_TOKEN is not set"
-            exit 1
-          fi
+      # Build JSON payload safely (no heredoc)
+      PAYLOAD="{\"query\":\"query{ user(login: \\\"${GITHUB_USER}\\\") { private: repositoriesContributedTo(privacy:PRIVATE) { totalCount } public: repositoriesContributedTo(privacy:PUBLIC) { totalCount } } }\"}"
 
-          read -r -d '' PAYLOAD <<'GRAPHQL'
-{"query":"query($login:String!){ user(login:$login){ private: repositoriesContributedTo(privacy:PRIVATE) { totalCount } public: repositoriesContributedTo(privacy:PUBLIC) { totalCount } } }","variables":{"login":"__LOGIN__"}}
-GRAPHQL
-          PAYLOAD="${PAYLOAD//__LOGIN__/$GITHUB_USER}"
+      resp=$(curl -s -H "Authorization: bearer $TOKEN" -X POST -d "$PAYLOAD" https://api.github.com/graphql)
+      private_count=$(echo "$resp" | jq -r '.data.user.private.totalCount // 0')
+      public_count=$(echo "$resp" | jq -r '.data.user.public.totalCount // 0')
 
-          resp=$(curl -s -H "Authorization: bearer $TOKEN" -X POST -d "$PAYLOAD" https://api.github.com/graphql)
-          private_count=$(echo "$resp" | jq -r '.data.user.private.totalCount // 0')
-          public_count=$(echo "$resp" | jq -r '.data.user.public.totalCount // 0')
+      echo "PRIVATE_REPOS_COUNT=$private_count" >> $GITHUB_ENV
+      echo "PUBLIC_REPOS_COUNT=$public_count" >> $GITHUB_ENV
+      echo "Found private: $private_count, public: $public_count"
 
-          echo "PRIVATE_REPOS_COUNT=$private_count" >> $GITHUB_ENV
-          echo "PUBLIC_REPOS_COUNT=$public_count" >> $GITHUB_ENV
+  - name: Update README placeholders
+    env:
+      PRIVATE_REPOS_COUNT: ${{ env.PRIVATE_REPOS_COUNT }}
+      PUBLIC_REPOS_COUNT: ${{ env.PUBLIC_REPOS_COUNT }}
+    run: |
+      if [ ! -f README.md ]; then
+        echo "README.md not found"
+        exit 1
+      fi
 
-      - name: Update README placeholders
-        env:
-          PRIVATE_REPOS_COUNT: ${{ env.PRIVATE_REPOS_COUNT }}
-          PUBLIC_REPOS_COUNT: ${{ env.PUBLIC_REPOS_COUNT }}
-        run: |
-          if [ ! -f README.md ]; then
-            echo "README.md not found"
-            exit 1
-          fi
+      perl -0777 -pe "s/<!--PRIVATE_REPOS_COUNT-->.*?<!--END_PRIVATE_REPOS_COUNT-->/<!--PRIVATE_REPOS_COUNT-->${PRIVATE_REPOS_COUNT}<!--END_PRIVATE_REPOS_COUNT-->/s" -i README.md
+      perl -0777 -pe "s/<!--PUBLIC_REPOS_COUNT-->.*?<!--END_PUBLIC_REPOS_COUNT-->/<!--PUBLIC_REPOS_COUNT-->${PUBLIC_REPOS_COUNT}<!--END_PUBLIC_REPOS_COUNT-->/s" -i README.md
 
-          perl -0777 -pe "s/<!--PRIVATE_REPOS_COUNT-->.*?<!--END_PRIVATE_REPOS_COUNT-->/<!--PRIVATE_REPOS_COUNT-->${PRIVATE_REPOS_COUNT}<!--END_PRIVATE_REPOS_COUNT-->/s" -i README.md
-          perl -0777 -pe "s/<!--PUBLIC_REPOS_COUNT-->.*?<!--END_PUBLIC_REPOS_COUNT-->/<!--PUBLIC_REPOS_COUNT-->${PUBLIC_REPOS_COUNT}<!--END_PUBLIC_REPOS_COUNT-->/s" -i README.md
+      git --no-pager diff -- README.md || true
 
-          git --no-pager diff -- README.md || true
-
-      - name: Commit & push if changed
-        env:
-          GIT_AUTHOR_NAME: "github-actions[bot]"
-          GIT_AUTHOR_EMAIL: "41898282+github-actions[bot]@users.noreply.github.com"
-        run: |
-          git config user.name "$GIT_AUTHOR_NAME"
-          git config user.email "$GIT_AUTHOR_EMAIL"
-          if git diff --quiet; then
-            echo "No changes to commit"
-          else
-            git add README.md
-            git commit -m "chore: update public/private repo contribution counts"
-            git push
-          fi
+  - name: Commit & push if changed
+    env:
+      GIT_AUTHOR_NAME: "github-actions[bot]"
+      GIT_AUTHOR_EMAIL: "41898282+github-actions[bot]@users.noreply.github.com"
+    run: |
+      git config user.name "$GIT_AUTHOR_NAME"
+      git config user.email "$GIT_AUTHOR_EMAIL"
+      if git diff --quiet; then
+        echo "No changes to commit"
+      else
+        git add README.md
+        git commit -m "chore: update public/private repo contribution counts"
+        git push
+      fi
