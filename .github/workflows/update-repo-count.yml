@@ -13,7 +13,8 @@
         exit 1
       fi
 
-      PAYLOAD="{\"query\":\"query{ user(login: \\\"${GITHUB_USER}\\\") { private: repositoriesContributedTo(privacy:PRIVATE) { totalCount } public: repositoriesContributedTo(privacy:PUBLIC) { totalCount } } }\"}"
+      # Build JSON payload safely
+      PAYLOAD="{\"query\":\"query { user(login: \\\"${GITHUB_USER}\\\") { private: repositoriesContributedTo(privacy:PRIVATE) { totalCount } public: repositoriesContributedTo(privacy:PUBLIC) { totalCount } } }\" }"
 
       resp=$(curl -s -H "Authorization: bearer $TOKEN" -X POST -d "$PAYLOAD" https://api.github.com/graphql)
       private_count=$(echo "$resp" | jq -r '.data.user.private.totalCount // 0')
