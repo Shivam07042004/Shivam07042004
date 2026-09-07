@@ -80,5 +80,4 @@ PY
           git commit -m "chore: update public/private repo contribution counts"
           git remote set-url origin https://x-access-token:${PERSONAL_TOKEN}@github.com/${GITHUB_REPOSITORY}
           branch=${GITHUB_REF#refs/heads/}
-          echo "Pushing to branch ${branch}"
           git push origin HEAD:${branch}
