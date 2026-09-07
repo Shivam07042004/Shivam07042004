@@ -2,8 +2,11 @@ name: Update repo contribution counts
 
 on:
   schedule:
-    - cron: '0 6 * * *' # daily at 06:00 UTC
+    - cron: "0 6 * * *"
   workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   update-counts:
@@ -13,159 +16,294 @@ jobs:
       GITHUB_USER: "Shivam07042004"
 
     steps:
+      # --------------------------------------------------
+      # Checkout repository
+      # --------------------------------------------------
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - name: Query GraphQL, update README, commit & push
+      # --------------------------------------------------
+      # Get contribution counts and update README
+      # --------------------------------------------------
+      - name: Update README
         env:
           PERSONAL_TOKEN: ${{ secrets.PERSONAL_TOKEN }}
           GITHUB_USER: ${{ env.GITHUB_USER }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
-          GITHUB_REF: ${{ github.ref }}
-
         run: |
           set -euo pipefail
 
           python3 - <<'PY'
-          import os, sys, json, re, urllib.request, urllib.error, subprocess
+          import os
+          import sys
+          import json
+          import re
+          import urllib.request
+          import urllib.error
 
-          def fail(msg):
-              print("ERROR:", msg, file=sys.stderr)
-              sys.exit(1)
+          # --------------------------------------------------
+          # Configuration
+          # --------------------------------------------------
 
           token = os.getenv("PERSONAL_TOKEN")
-          if not token:
-              fail("PERSONAL_TOKEN secret is not set")
-
           login = os.getenv("GITHUB_USER")
-          if not login:
-              fail("GITHUB_USER not set")
 
-          # GraphQL query: repositoriesContributedTo (counts repos you've contributed to)
+          if not token:
+              print("ERROR: PERSONAL_TOKEN secret is not set")
+              sys.exit(1)
+
+          if not login:
+              print("ERROR: GITHUB_USER is not set")
+              sys.exit(1)
+
+          print(f"Checking GitHub contributions for: {login}")
+
+          # --------------------------------------------------
+          # GraphQL query
+          # --------------------------------------------------
+
           query = """
-          query($login:String!){
-            user(login:$login){
-              private: repositoriesContributedTo(privacy:PRIVATE) { totalCount }
-              public: repositoriesContributedTo(privacy:PUBLIC) { totalCount }
+          query($login: String!) {
+            user(login: $login) {
+              login
+              name
+              repositoriesContributedTo(
+                first: 1
+                privacy: PUBLIC
+              ) {
+                totalCount
+              }
+
+              repositoriesContributedToPrivate: repositoriesContributedTo(
+                first: 1
+                privacy: PRIVATE
+              ) {
+                totalCount
+              }
             }
           }
           """
 
           payload = json.dumps({
               "query": query,
-              "variables": {"login": login}
+              "variables": {
+                  "login": login
+              }
           }).encode("utf-8")
 
-          req = urllib.request.Request(
+          request = urllib.request.Request(
               "https://api.github.com/graphql",
               data=payload,
               headers={
-                  "Authorization": f"bearer {token}",
+                  "Authorization": f"Bearer {token}",
                   "Content-Type": "application/json",
-                  "User-Agent": "update-repo-count-action"
+                  "Accept": "application/json",
+                  "User-Agent": "github-actions-repo-counter"
               }
           )
 
-          try:
-              with urllib.request.urlopen(req, timeout=30) as resp:
-                  body = resp.read().decode("utf-8")
+          # --------------------------------------------------
+          # Call GitHub GraphQL API
+          # --------------------------------------------------
 
-          except urllib.error.HTTPError as e:
-              fail(
-                  f"HTTP Error querying GraphQL: {e.code} {e.reason} - "
-                  f"{e.read().decode('utf-8')[:1000]}"
+          try:
+              with urllib.request.urlopen(request, timeout=30) as response:
+                  body = response.read().decode("utf-8")
+
+          except urllib.error.HTTPError as error:
+              error_body = error.read().decode("utf-8")
+
+              print(
+                  f"ERROR: GitHub API returned "
+                  f"{error.code} {error.reason}"
               )
 
-          except Exception as e:
-              fail(f"Network error querying GraphQL: {e}")
+              print(error_body[:3000])
+              sys.exit(1)
+
+          except Exception as error:
+              print(f"ERROR: Network request failed: {error}")
+              sys.exit(1)
+
+          # --------------------------------------------------
+          # Parse response
+          # --------------------------------------------------
 
           try:
               data = json.loads(body)
+          except json.JSONDecodeError:
+              print("ERROR: GitHub returned invalid JSON")
+              print(body[:3000])
+              sys.exit(1)
 
-              private_count = (
-                  data["data"]["user"]["private"]["totalCount"] or 0
-              )
+          # IMPORTANT:
+          # GraphQL can return HTTP 200 even when the query
+          # itself contains errors.
+          # --------------------------------------------------
 
-              public_count = (
-                  data["data"]["user"]["public"]["totalCount"] or 0
-              )
+          if "errors" in data:
+              print("ERROR: GraphQL returned errors:")
 
-          except Exception as e:
-              fail(
-                  f"Unexpected GraphQL response: {e}\n"
-                  f"Response: {body[:2000]}"
-              )
+              for error in data["errors"]:
+                  print(json.dumps(error, indent=2))
 
-          print(
-              f"Counts -> private: {private_count}, "
-              f"public: {public_count}"
+              sys.exit(1)
+
+          if "data" not in data:
+              print("ERROR: No data field in GraphQL response")
+              print(json.dumps(data, indent=2))
+              sys.exit(1)
+
+          user = data["data"].get("user")
+
+          if user is None:
+              print(f"ERROR: GitHub user '{login}' was not found")
+              sys.exit(1)
+
+          # --------------------------------------------------
+          # Get counts
+          # --------------------------------------------------
+
+          public_count = (
+              user["repositoriesContributedTo"]["totalCount"]
           )
 
-          # Update README.md
+          private_count = (
+              user["repositoriesContributedToPrivate"]["totalCount"]
+          )
+
+          print("----------------------------------------")
+          print(f"GitHub user : {user.get('login')}")
+          print(f"Public repos: {public_count}")
+          print(f"Private repos: {private_count}")
+          print("----------------------------------------")
+
+          # --------------------------------------------------
+          # Update README
+          # --------------------------------------------------
+
           readme = "README.md"
 
           if not os.path.exists(readme):
-              fail("README.md not found in repo root")
+              print("ERROR: README.md not found")
+              sys.exit(1)
 
-          with open(readme, "r", encoding="utf-8") as f:
-              s = f.read()
+          with open(readme, "r", encoding="utf-8") as file:
+              content = file.read()
 
-          s_new = re.sub(
-              r"<!--PRIVATE_REPOS_COUNT-->.*?<!--END_PRIVATE_REPOS_COUNT-->",
-              f"<!--PRIVATE_REPOS_COUNT-->{private_count}"
-              f"<!--END_PRIVATE_REPOS_COUNT-->",
-              s,
+          # --------------------------------------------------
+          # Check markers exist
+          # --------------------------------------------------
+
+          private_pattern = (
+              r"<!--PRIVATE_REPOS_COUNT-->.*?"
+              r"<!--END_PRIVATE_REPOS_COUNT-->"
+          )
+
+          public_pattern = (
+              r"<!--PUBLIC_REPOS_COUNT-->.*?"
+              r"<!--END_PUBLIC_REPOS_COUNT-->"
+          )
+
+          if not re.search(private_pattern, content, flags=re.S):
+              print(
+                  "ERROR: Private repository markers "
+                  "were not found in README.md"
+              )
+
+              print(
+                  "Add this to your README:\n"
+                  "<!--PRIVATE_REPOS_COUNT-->0"
+                  "<!--END_PRIVATE_REPOS_COUNT-->"
+              )
+
+              sys.exit(1)
+
+          if not re.search(public_pattern, content, flags=re.S):
+              print(
+                  "ERROR: Public repository markers "
+                  "were not found in README.md"
+              )
+
+              print(
+                  "Add this to your README:\n"
+                  "<!--PUBLIC_REPOS_COUNT-->0"
+                  "<!--END_PUBLIC_REPOS_COUNT-->"
+              )
+
+              sys.exit(1)
+
+          # --------------------------------------------------
+          # Replace values
+          # --------------------------------------------------
+
+          updated = re.sub(
+              private_pattern,
+              (
+                  "<!--PRIVATE_REPOS_COUNT-->"
+                  f"{private_count}"
+                  "<!--END_PRIVATE_REPOS_COUNT-->"
+              ),
+              content,
               flags=re.S
           )
 
-          s_new = re.sub(
-              r"<!--PUBLIC_REPOS_COUNT-->.*?<!--END_PUBLIC_REPOS_COUNT-->",
-              f"<!--PUBLIC_REPOS_COUNT-->{public_count}"
-              f"<!--END_PUBLIC_REPOS_COUNT-->",
-              s_new,
+          updated = re.sub(
+              public_pattern,
+              (
+                  "<!--PUBLIC_REPOS_COUNT-->"
+                  f"{public_count}"
+                  "<!--END_PUBLIC_REPOS_COUNT-->"
+              ),
+              updated,
               flags=re.S
           )
 
-          if s_new == s:
-              print("No README changes required")
+          # --------------------------------------------------
+          # Check whether anything changed
+          # --------------------------------------------------
+
+          if updated == content:
+              print("README is already up to date.")
               sys.exit(0)
 
-          with open(readme, "w", encoding="utf-8") as f:
-              f.write(s_new)
+          # --------------------------------------------------
+          # Write README
+          # --------------------------------------------------
 
-          print("README updated locally")
+          with open(readme, "w", encoding="utf-8") as file:
+              file.write(updated)
 
-          # Commit & push using PAT
-          repo = os.getenv("GITHUB_REPOSITORY")
-          ref = os.getenv("GITHUB_REF", "refs/heads/master")
-          branch = ref.split("/")[-1]
+          print("README.md updated successfully.")
 
-          def run(cmd):
-              print("+", " ".join(cmd))
-              subprocess.run(cmd, check=True)
-
-          run(["git", "add", readme])
-
-          run([
-              "git",
-              "commit",
-              "-m",
-              "chore: update public/private repo contribution counts"
-          ])
-
-          remote = (
-              f"https://x-access-token:{token}"
-              f"@github.com/{repo}.git"
-          )
-
-          run(["git", "remote", "set-url", "origin", remote])
-
-          run([
-              "git",
-              "push",
-              "origin",
-              f"HEAD:{branch}"
-          ])
-
-          print("Pushed changes to", branch)
           PY
+
+      # --------------------------------------------------
+      # Configure Git
+      # --------------------------------------------------
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      # --------------------------------------------------
+      # Commit changes
+      # --------------------------------------------------
+      - name: Commit changes
+        run: |
+          git add README.md
+
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+            exit 0
+          fi
+
+          git commit -m "chore: update repository contribution counts"
+
+      # --------------------------------------------------
+      # Push changes
+      # --------------------------------------------------
+      - name: Push changes
+        run: |
+          git push
