@@ -2,7 +2,7 @@ name: Update repo contribution counts
 
 on:
   schedule:
-    - cron: '0 6 * * *'
+    - cron: '0 6 * * *' # daily at 06:00 UTC
   workflow_dispatch:
 
 jobs:
@@ -27,13 +27,7 @@ jobs:
           set -euo pipefail
 
           python3 - <<'PY'
-          import os
-          import sys
-          import json
-          import re
-          import urllib.request
-          import urllib.error
-          import subprocess
+          import os, sys, json, re, urllib.request, urllib.error, subprocess
 
           def fail(msg):
               print("ERROR:", msg, file=sys.stderr)
@@ -47,15 +41,12 @@ jobs:
           if not login:
               fail("GITHUB_USER not set")
 
+          # GraphQL query: repositoriesContributedTo (counts repos you've contributed to)
           query = """
           query($login:String!){
             user(login:$login){
-              private: repositoriesContributedTo(privacy:PRIVATE) {
-                totalCount
-              }
-              public: repositoriesContributedTo(privacy:PUBLIC) {
-                totalCount
-              }
+              private: repositoriesContributedTo(privacy:PRIVATE) { totalCount }
+              public: repositoriesContributedTo(privacy:PUBLIC) { totalCount }
             }
           }
           """
@@ -78,30 +69,30 @@ jobs:
           try:
               with urllib.request.urlopen(req, timeout=30) as resp:
                   body = resp.read().decode("utf-8")
+
           except urllib.error.HTTPError as e:
               fail(
-                  f"HTTP Error: {e.code} {e.reason} - "
+                  f"HTTP Error querying GraphQL: {e.code} {e.reason} - "
                   f"{e.read().decode('utf-8')[:1000]}"
               )
+
           except Exception as e:
-              fail(f"Network error: {e}")
+              fail(f"Network error querying GraphQL: {e}")
 
           try:
               data = json.loads(body)
 
-              if "errors" in data:
-                  fail(f"GraphQL errors: {data['errors']}")
-
               private_count = (
                   data["data"]["user"]["private"]["totalCount"] or 0
               )
+
               public_count = (
                   data["data"]["user"]["public"]["totalCount"] or 0
               )
 
           except Exception as e:
               fail(
-                  f"Unexpected GraphQL response structure: {e}\n"
+                  f"Unexpected GraphQL response: {e}\n"
                   f"Response: {body[:2000]}"
               )
 
@@ -110,6 +101,7 @@ jobs:
               f"public: {public_count}"
           )
 
+          # Update README.md
           readme = "README.md"
 
           if not os.path.exists(readme):
@@ -143,29 +135,14 @@ jobs:
 
           print("README updated locally")
 
+          # Commit & push using PAT
           repo = os.getenv("GITHUB_REPOSITORY")
-
-          if not repo:
-              fail("GITHUB_REPOSITORY not set")
-
-          ref = os.getenv(
-              "GITHUB_REF",
-              "refs/heads/master"
-          )
-
+          ref = os.getenv("GITHUB_REF", "refs/heads/master")
           branch = ref.split("/")[-1]
 
           def run(cmd):
               print("+", " ".join(cmd))
               subprocess.run(cmd, check=True)
-
-          run(["git", "config", "user.name", "github-actions[bot]"])
-          run([
-              "git",
-              "config",
-              "user.email",
-              "41898282+github-actions[bot]@users.noreply.github.com"
-          ])
 
           run(["git", "add", readme])
 
