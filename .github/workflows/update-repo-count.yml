@@ -20,13 +20,13 @@ jobs:
           echo "GitHub Contribution Counter"
           echo "========================================"
           echo "User: $USERNAME"
-          echo "From: 2021-01-01"
+          echo "From: 2025-10-01"
           echo "To: today"
           echo ""
 
           gh api graphql \
             -f login="$USERNAME" \
-            -f from="2021-01-01T00:00:00Z" \
+            -f from="2021-10-01T00:00:00Z" \
             -f to="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             -f query='query($login:String!,$from:DateTime!,$to:DateTime!){user(login:$login){login contributionsCollection(from:$from,to:$to){commitContributionsByRepository{repository{nameWithOwner isPrivate} contributions{totalCount}}}}}' \
             > contributions.json
