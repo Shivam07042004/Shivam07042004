@@ -1,243 +1,76 @@
-name: Update repo contribution counts
+name: Update repository contribution counts
 
 on:
-schedule:
-- cron: "0 6 * * *"
-workflow_dispatch:
-
-permissions:
-contents: write
+  workflow_dispatch:
 
 jobs:
-update-counts:
-runs-on: ubuntu-latest
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
 
-```
-env:
-  GITHUB_USER: "Shivam07042004"
+      - name: Count repositories
+        env:
+          USERNAME: Shivam07042004
+          GH_TOKEN: ${{ secrets.PERSONAL_TOKEN }}
+        run: |
+          set -e
 
-steps:
-  - name: Checkout repository
-    uses: actions/checkout@v4
+          echo "========================================"
+          echo "GitHub Contribution Counter"
+          echo "========================================"
+          echo "User: $USERNAME"
+          echo "From: 2021-01-01"
+          echo "To: today"
+          echo ""
 
-  - name: Calculate contribution repository counts
-    env:
-      GH_TOKEN: ${{ secrets.PERSONAL_TOKEN }}
-    run: |
-      set -euo pipefail
+          gh api graphql \
+            -f login="$USERNAME" \
+            -f from="2021-01-01T00:00:00Z" \
+            -f to="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            -f query='query($login:String!,$from:DateTime!,$to:DateTime!){user(login:$login){login contributionsCollection(from:$from,to:$to){commitContributionsByRepository{repository{nameWithOwner isPrivate} contributions{totalCount}}}}}' \
+            > contributions.json
 
-      echo "========================================"
-      echo "Checking contributions for: $GITHUB_USER"
-      echo "========================================"
+          echo "GraphQL response:"
+          cat contributions.json
+          echo ""
 
-      FROM_DATE="2021-01-01T00:00:00Z"
-      TO_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          if jq -e '.errors' contributions.json >/dev/null; then
+            echo "GraphQL error:"
+            jq '.errors' contributions.json
+            exit 1
+          fi
 
-      echo "Contribution period:"
-      echo "From: $FROM_DATE"
-      echo "To  : $TO_DATE"
-      echo ""
+          PUBLIC_COUNT=$(jq '[.data.user.contributionsCollection.commitContributionsByRepository[] | select(.repository.isPrivate == false) | .repository.nameWithOwner] | unique | length' contributions.json)
 
-      # Query GitHub contribution history from 2021 until today.
-      gh api graphql \
-        -f login="$GITHUB_USER" \
-        -f from="$FROM_DATE" \
-        -f to="$TO_DATE" \
-        -f query='
-          query(
-            $login: String!,
-            $from: DateTime!,
-            $to: DateTime!
-          ) {
-            user(login: $login) {
-              login
+          PRIVATE_COUNT=$(jq '[.data.user.contributionsCollection.commitContributionsByRepository[] | select(.repository.isPrivate == true) | .repository.nameWithOwner] | unique | length' contributions.json)
 
-              contributionsCollection(
-                from: $from
-                to: $to
-              ) {
-                commitContributionsByRepository {
-                  repository {
-                    nameWithOwner
-                    isPrivate
-                  }
+          echo ""
+          echo "========================================"
+          echo "RESULT"
+          echo "========================================"
+          echo "Public repositories:  $PUBLIC_COUNT"
+          echo "Private repositories: $PRIVATE_COUNT"
+          echo "========================================"
 
-                  contributions {
-                    totalCount
-                  }
-                }
-              }
-            }
-          }
-        ' > /tmp/contributions.json
+          sed -i "s/<!--PRIVATE_REPOS_COUNT-->.*<!--END_PRIVATE_REPOS_COUNT-->/<!--PRIVATE_REPOS_COUNT-->${PRIVATE_COUNT}<!--END_PRIVATE_REPOS_COUNT-->/" README.md
 
-      echo "========================================"
-      echo "GraphQL response"
-      echo "========================================"
+          sed -i "s/<!--PUBLIC_REPOS_COUNT-->.*<!--END_PUBLIC_REPOS_COUNT-->/<!--PUBLIC_REPOS_COUNT-->${PUBLIC_COUNT}<!--END_PUBLIC_REPOS_COUNT-->/" README.md
 
-      jq . /tmp/contributions.json
+          echo ""
+          echo "README updated:"
+          grep "PRIVATE_REPOS_COUNT" README.md
+          grep "PUBLIC_REPOS_COUNT" README.md
 
-      echo ""
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-      # Check GraphQL errors.
-      if jq -e '.errors' /tmp/contributions.json >/dev/null; then
-        echo "ERROR: GraphQL returned errors:"
-        jq '.errors' /tmp/contributions.json
-        exit 1
-      fi
+          git add README.md
 
-      # Make sure the GitHub user exists.
-      USER_LOGIN=$(jq -r '.data.user.login // empty' /tmp/contributions.json)
+          if git diff --cached --quiet; then
+            echo "No changes."
+            exit 0
+          fi
 
-      if [ -z "$USER_LOGIN" ]; then
-        echo "ERROR: GitHub user was not found."
-        exit 1
-      fi
-
-      # ---------------------------------------------
-      # Count unique PUBLIC repositories
-      # ---------------------------------------------
-
-      PUBLIC_COUNT=$(jq '
-        [
-          .data.user.contributionsCollection.commitContributionsByRepository[]
-          | select(.repository.isPrivate == false)
-          | .repository.nameWithOwner
-        ]
-        | unique
-        | length
-      ' /tmp/contributions.json)
-
-      # ---------------------------------------------
-      # Count unique PRIVATE repositories
-      # ---------------------------------------------
-
-      PRIVATE_COUNT=$(jq '
-        [
-          .data.user.contributionsCollection.commitContributionsByRepository[]
-          | select(.repository.isPrivate == true)
-          | .repository.nameWithOwner
-        ]
-        | unique
-        | length
-      ' /tmp/contributions.json)
-
-      TOTAL_COUNT=$((PUBLIC_COUNT + PRIVATE_COUNT))
-
-      echo ""
-      echo "========================================"
-      echo "FINAL CONTRIBUTION COUNTS"
-      echo "========================================"
-      echo "GitHub user          : $USER_LOGIN"
-      echo "From                 : 2021-01-01"
-      echo "To                   : $TO_DATE"
-      echo "Public repositories  : $PUBLIC_COUNT"
-      echo "Private repositories : $PRIVATE_COUNT"
-      echo "Total repositories   : $TOTAL_COUNT"
-      echo "========================================"
-
-      # ---------------------------------------------
-      # Show detected repositories
-      # ---------------------------------------------
-
-      echo ""
-      echo "Repositories detected:"
-      echo "----------------------------------------"
-
-      jq -r '
-        .data.user.contributionsCollection.commitContributionsByRepository[]
-        | "\(.repository.nameWithOwner) | private=\(.repository.isPrivate) | commits=\(.contributions.totalCount)"
-      ' /tmp/contributions.json
-
-      echo "----------------------------------------"
-
-      # Export values for the README step.
-      echo "PUBLIC_COUNT=$PUBLIC_COUNT" >> "$GITHUB_ENV"
-      echo "PRIVATE_COUNT=$PRIVATE_COUNT" >> "$GITHUB_ENV"
-      echo "TOTAL_COUNT=$TOTAL_COUNT" >> "$GITHUB_ENV"
-
-  - name: Update README
-    run: |
-      set -euo pipefail
-
-      echo "Updating README.md..."
-
-      if [ ! -f README.md ]; then
-        echo "ERROR: README.md not found"
-        exit 1
-      fi
-
-      # ---------------------------------------------
-      # Verify README markers
-      # ---------------------------------------------
-
-      grep -q '<!--PRIVATE_REPOS_COUNT-->' README.md || {
-        echo "ERROR: PRIVATE_REPOS_COUNT marker not found"
-        exit 1
-      }
-
-      grep -q '<!--END_PRIVATE_REPOS_COUNT-->' README.md || {
-        echo "ERROR: END_PRIVATE_REPOS_COUNT marker not found"
-        exit 1
-      }
-
-      grep -q '<!--PUBLIC_REPOS_COUNT-->' README.md || {
-        echo "ERROR: PUBLIC_REPOS_COUNT marker not found"
-        exit 1
-      }
-
-      grep -q '<!--END_PUBLIC_REPOS_COUNT-->' README.md || {
-        echo "ERROR: END_PUBLIC_REPOS_COUNT marker not found"
-        exit 1
-      }
-
-      # ---------------------------------------------
-      # Update PRIVATE repository count
-      # ---------------------------------------------
-
-      sed -i -E \
-        "s|<!--PRIVATE_REPOS_COUNT-->.*<!--END_PRIVATE_REPOS_COUNT-->|<!--PRIVATE_REPOS_COUNT-->${PRIVATE_COUNT}<!--END_PRIVATE_REPOS_COUNT-->|" \
-        README.md
-
-      # ---------------------------------------------
-      # Update PUBLIC repository count
-      # ---------------------------------------------
-
-      sed -i -E \
-        "s|<!--PUBLIC_REPOS_COUNT-->.*<!--END_PUBLIC_REPOS_COUNT-->|<!--PUBLIC_REPOS_COUNT-->${PUBLIC_COUNT}<!--END_PUBLIC_REPOS_COUNT-->|" \
-        README.md
-
-      echo ""
-      echo "========================================"
-      echo "README UPDATED"
-      echo "========================================"
-      echo "Private repositories: $PRIVATE_COUNT"
-      echo "Public repositories : $PUBLIC_COUNT"
-      echo "Total repositories  : $TOTAL_COUNT"
-      echo "========================================"
-
-  - name: Show README changes
-    run: |
-      echo "README changes:"
-      echo "----------------------------------------"
-      git diff -- README.md
-      echo "----------------------------------------"
-
-  - name: Commit and push
-    run: |
-      set -euo pipefail
-
-      git config user.name "github-actions[bot]"
-      git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
-      git add README.md
-
-      if git diff --cached --quiet; then
-        echo "No README changes."
-        exit 0
-      fi
-
-      git commit -m "chore: update repository contribution counts"
-
-      git push
-```
+          git commit -m "chore: update repository contribution counts"
+          git push
