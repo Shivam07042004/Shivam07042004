@@ -1,7 +1,9 @@
-name: Update repository contribution counts
+name: Update commit counts
 
 on:
   workflow_dispatch:
+  schedule:
+    - cron: "0 0 * * *"
 
 permissions:
   contents: write
@@ -11,299 +13,180 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # ==========================================================
-      # Checkout profile repository
-      # ==========================================================
-      - name: Checkout repository
+      - name: Checkout profile repository
         uses: actions/checkout@v4
         with:
           token: ${{ github.token }}
 
-      # ==========================================================
-      # Count repositories
-      # ==========================================================
-      - name: Count repository contributions
+      - name: Count commits
         env:
           USERNAME: Shivam07042004
           GH_TOKEN: ${{ secrets.PERSONAL_TOKEN }}
-        shell: bash
         run: |
           set -uo pipefail
-
-          echo "========================================"
-          echo "GitHub Contribution Counter"
-          echo "========================================"
-          echo "Target user: $USERNAME"
-          echo "From: 2021-01-01"
-          echo "To: today"
-          echo ""
 
           FROM_DATE="2021-01-01T00:00:00Z"
           TO_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
-          rm -f /tmp/repos.json
-          rm -f /tmp/private_repos.json
-          rm -f /tmp/contributed_repos.json
+          echo "========================================"
+          echo "GitHub Commit Counter"
+          echo "========================================"
+          echo "User: $USERNAME"
+          echo "From: $FROM_DATE"
+          echo "To:   $TO_DATE"
+          echo ""
 
-          # ========================================================
+          # --------------------------------------------------
           # Verify token
-          # ========================================================
+          # --------------------------------------------------
 
-          echo "========================================"
-          echo "VERIFYING PERSONAL TOKEN"
-          echo "========================================"
-
-          AUTH_USER=$(gh api user --jq '.login' 2>/dev/null)
-
-          echo "Authenticated GitHub account: $AUTH_USER"
+          AUTH_USER=$(gh api user --jq '.login')
 
           if [ "$AUTH_USER" != "$USERNAME" ]; then
-            echo ""
-            echo "ERROR: PERSONAL_TOKEN belongs to:"
-            echo "$AUTH_USER"
-            echo ""
-            echo "Expected:"
-            echo "$USERNAME"
+            echo "ERROR: PAT belongs to $AUTH_USER, expected $USERNAME"
             exit 1
           fi
 
+          echo "Authenticated GitHub account: $AUTH_USER"
           echo "Token authentication: OK"
           echo ""
 
-          # ========================================================
-          # Check private repositories
-          # ========================================================
+          # --------------------------------------------------
+          # Get all repositories accessible to the PAT
+          # --------------------------------------------------
 
-          echo "========================================"
-          echo "FETCHING PRIVATE REPOSITORIES"
-          echo "========================================"
+          echo "Fetching repositories..."
 
-          gh api --paginate \
-            "/user/repos?visibility=private&affiliation=owner&per_page=100" \
-            --jq '.[] | {
-              full_name: .full_name,
-              private: .private
-            }' \
-            | jq -s '.' > /tmp/private_repos.json
-
-          PRIVATE_VISIBLE=$(jq 'length' /tmp/private_repos.json)
-
-          echo "Private repositories visible to PAT: $PRIVATE_VISIBLE"
-          echo ""
-
-          if [ "$PRIVATE_VISIBLE" -gt 0 ]; then
-            echo "Private repositories accessible by token:"
-            jq -r '.[].full_name' /tmp/private_repos.json
-          fi
-
-          echo ""
-
-          # ========================================================
-          # Fetch all repositories
-          # ========================================================
-
-          echo "========================================"
-          echo "FETCHING ALL ACCESSIBLE REPOSITORIES"
-          echo "========================================"
-
-          gh api --paginate \
+          gh api \
+            --paginate \
+            -H "Accept: application/vnd.github+json" \
             "/user/repos?affiliation=owner,collaborator,organization_member&visibility=all&per_page=100" \
             --jq '.[] | {
-              full_name: .full_name,
-              private: .private,
-              owner: .owner.login
+              nameWithOwner: .full_name,
+              isPrivate: .private
             }' \
-            | jq -s 'unique_by(.full_name)' > /tmp/repos.json
+            > /tmp/repos.jsonl
 
-          TOTAL_VISIBLE=$(jq 'length' /tmp/repos.json)
+          REPO_COUNT=$(wc -l < /tmp/repos.jsonl)
 
-          echo "Total repositories visible to token: $TOTAL_VISIBLE"
+          echo "Total repositories visible to token: $REPO_COUNT"
           echo ""
 
-          # ========================================================
-          # Initialize result file
-          # ========================================================
+          # --------------------------------------------------
+          # Counters
+          # --------------------------------------------------
 
-          echo "[]" > /tmp/contributed_repos.json
+          PUBLIC_COMMITS=0
+          PRIVATE_COMMITS=0
 
-          # ========================================================
-          # Check commits
-          # ========================================================
+          PUBLIC_REPOS_WITH_COMMITS=0
+          PRIVATE_REPOS_WITH_COMMITS=0
 
-          echo "========================================"
-          echo "CHECKING COMMITS"
-          echo "========================================"
-          echo ""
+          # --------------------------------------------------
+          # Check every repository
+          # --------------------------------------------------
 
           while IFS= read -r REPO; do
 
-            FULL_NAME=$(echo "$REPO" | jq -r '.full_name')
-            IS_PRIVATE=$(echo "$REPO" | jq -r '.private')
+            FULL_NAME=$(echo "$REPO" | jq -r '.nameWithOwner')
+            IS_PRIVATE=$(echo "$REPO" | jq -r '.isPrivate')
 
             echo "Checking: $FULL_NAME"
 
-            # ------------------------------------------------------
-            # IMPORTANT:
+            # GitHub's commits endpoint returns commits authored
+            # by the specified GitHub username.
             #
-            # Some GitHub repositories can return errors such as:
-            #
-            # 409 Repository is empty
-            # 404 No commits
-            # 409 Git Repository is empty
-            #
-            # We don't want one such repository to terminate the
-            # entire workflow.
-            # ------------------------------------------------------
+            # We use --paginate so repositories with more than
+            # 100 commits are fully counted.
 
-            TEMP_COMMITS="/tmp/commits.json"
+            TEMP_FILE=$(mktemp)
 
-            rm -f "$TEMP_COMMITS"
+            if gh api \
+              --paginate \
+              -H "Accept: application/vnd.github+json" \
+              "/repos/${FULL_NAME}/commits?author=${USERNAME}&since=${FROM_DATE}&until=${TO_DATE}&per_page=100" \
+              > "$TEMP_FILE" 2>/tmp/commit_error; then
 
-            if gh api --paginate \
-                "/repos/${FULL_NAME}/commits?author=${USERNAME}&since=${FROM_DATE}&until=${TO_DATE}&per_page=100" \
-                > "$TEMP_COMMITS" 2>/tmp/gh_error.txt; then
-
-              COMMIT_COUNT=$(jq -s '
-                map(.[])
-                | length
-              ' "$TEMP_COMMITS" 2>/dev/null || echo "0")
+              COMMIT_COUNT=$(jq -s 'map(.[]) | length' "$TEMP_FILE")
 
             else
 
-              echo "  -> GitHub API returned an error"
-              echo "  -> Treating as 0 commits"
+              echo "  GitHub API error:"
+              cat /tmp/commit_error
+              echo "  Treating this repository as 0 commits."
 
-              if [ -s /tmp/gh_error.txt ]; then
-                ERROR_MESSAGE=$(head -c 300 /tmp/gh_error.txt)
-                echo "  -> $ERROR_MESSAGE"
+              COMMIT_COUNT=0
+
+            fi
+
+            rm -f "$TEMP_FILE"
+
+            echo "  Commits: $COMMIT_COUNT"
+
+            # ------------------------------------------------
+            # Add to totals
+            # ------------------------------------------------
+
+            if [ "$IS_PRIVATE" = "true" ]; then
+
+              PRIVATE_COMMITS=$((PRIVATE_COMMITS + COMMIT_COUNT))
+
+              if [ "$COMMIT_COUNT" -gt 0 ]; then
+                PRIVATE_REPOS_WITH_COMMITS=$((PRIVATE_REPOS_WITH_COMMITS + 1))
               fi
 
-              COMMIT_COUNT=0
-            fi
-
-            # Make sure count is numeric
-            if ! [[ "$COMMIT_COUNT" =~ ^[0-9]+$ ]]; then
-              COMMIT_COUNT=0
-            fi
-
-            if [ "$COMMIT_COUNT" -gt 0 ]; then
-
-              echo "  -> $COMMIT_COUNT commits"
-
-              jq \
-                --arg full_name "$FULL_NAME" \
-                --argjson private "$IS_PRIVATE" \
-                --argjson commits "$COMMIT_COUNT" \
-                '. + [{
-                  full_name: $full_name,
-                  private: $private,
-                  commits: $commits
-                }]' \
-                /tmp/contributed_repos.json \
-                > /tmp/contributed_repos.tmp
-
-              mv /tmp/contributed_repos.tmp /tmp/contributed_repos.json
-
             else
-              echo "  -> 0 commits"
+
+              PUBLIC_COMMITS=$((PUBLIC_COMMITS + COMMIT_COUNT))
+
+              if [ "$COMMIT_COUNT" -gt 0 ]; then
+                PUBLIC_REPOS_WITH_COMMITS=$((PUBLIC_REPOS_WITH_COMMITS + 1))
+              fi
+
             fi
 
-            echo ""
+          done < /tmp/repos.jsonl
 
-          done < <(jq -c '.[]' /tmp/repos.json)
+          # --------------------------------------------------
+          # Final totals
+          # --------------------------------------------------
 
-          # ========================================================
-          # Display repositories with contributions
-          # ========================================================
-
-          echo "========================================"
-          echo "REPOSITORIES WITH YOUR COMMITS"
-          echo "========================================"
-
-          CONTRIBUTED_COUNT=$(jq 'length' /tmp/contributed_repos.json)
-
-          echo "Repositories with commits: $CONTRIBUTED_COUNT"
-          echo ""
-
-          if [ "$CONTRIBUTED_COUNT" -gt 0 ]; then
-            jq -r '
-              .[]
-              | "\(.full_name) | private=\(.private) | commits=\(.commits)"
-            ' /tmp/contributed_repos.json
-          else
-            echo "No repositories found with commits."
-          fi
-
-          echo ""
-
-          # ========================================================
-          # Count PUBLIC repositories
-          # ========================================================
-
-          PUBLIC_COUNT=$(jq '
-            [
-              .[]
-              | select(.private == false)
-              | .full_name
-            ]
-            | unique
-            | length
-          ' /tmp/contributed_repos.json)
-
-          # ========================================================
-          # Count PRIVATE repositories
-          # ========================================================
-
-          PRIVATE_COUNT=$(jq '
-            [
-              .[]
-              | select(.private == true)
-              | .full_name
-            ]
-            | unique
-            | length
-          ' /tmp/contributed_repos.json)
-
-          TOTAL_COUNT=$((PUBLIC_COUNT + PRIVATE_COUNT))
-
-          # ========================================================
-          # Final result
-          # ========================================================
+          TOTAL_COMMITS=$((PUBLIC_COMMITS + PRIVATE_COMMITS))
+          TOTAL_REPOS=$((PUBLIC_REPOS_WITH_COMMITS + PRIVATE_REPOS_WITH_COMMITS))
 
           echo ""
           echo "========================================"
-          echo "FINAL RESULT"
-          echo "========================================"
-          echo "Public repositories:  $PUBLIC_COUNT"
-          echo "Private repositories: $PRIVATE_COUNT"
-          echo "Total repositories:   $TOTAL_COUNT"
+          echo "FINAL RESULTS"
           echo "========================================"
           echo ""
+          echo "Public commits:       $PUBLIC_COMMITS"
+          echo "Private commits:      $PRIVATE_COMMITS"
+          echo "Total commits:        $TOTAL_COMMITS"
+          echo ""
+          echo "Public repositories:  $PUBLIC_REPOS_WITH_COMMITS"
+          echo "Private repositories: $PRIVATE_REPOS_WITH_COMMITS"
+          echo "Total repositories:   $TOTAL_REPOS"
+          echo ""
 
-          # ========================================================
+          # --------------------------------------------------
           # Update README
-          # ========================================================
-
-          echo "========================================"
-          echo "UPDATING README"
-          echo "========================================"
+          # --------------------------------------------------
 
           sed -i \
-            "s/<!--PRIVATE_REPOS_COUNT-->.*<!--END_PRIVATE_REPOS_COUNT-->/<!--PRIVATE_REPOS_COUNT-->${PRIVATE_COUNT}<!--END_PRIVATE_REPOS_COUNT-->/" \
+            "s/<!--PRIVATE_COMMITS_COUNT-->.*<!--END_PRIVATE_COMMITS_COUNT-->/<!--PRIVATE_COMMITS_COUNT-->${PRIVATE_COMMITS}<!--END_PRIVATE_COMMITS_COUNT-->/" \
             README.md
 
           sed -i \
-            "s/<!--PUBLIC_REPOS_COUNT-->.*<!--END_PUBLIC_REPOS_COUNT-->/<!--PUBLIC_REPOS_COUNT-->${PUBLIC_COUNT}<!--END_PUBLIC_REPOS_COUNT-->/" \
+            "s/<!--PUBLIC_COMMITS_COUNT-->.*<!--END_PUBLIC_COMMITS_COUNT-->/<!--PUBLIC_COMMITS_COUNT-->${PUBLIC_COMMITS}<!--END_PUBLIC_COMMITS_COUNT-->/" \
             README.md
 
-          echo ""
-          echo "README values:"
-          grep "PRIVATE_REPOS_COUNT" README.md
-          grep "PUBLIC_REPOS_COUNT" README.md
+          sed -i \
+            "s/<!--TOTAL_COMMITS_COUNT-->.*<!--END_TOTAL_COMMITS_COUNT-->/<!--TOTAL_COMMITS_COUNT-->${TOTAL_COMMITS}<!--END_TOTAL_COMMITS_COUNT-->/" \
+            README.md
 
-          # ========================================================
+          # --------------------------------------------------
           # Commit changes
-          # ========================================================
+          # --------------------------------------------------
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -311,16 +194,9 @@ jobs:
           git add README.md
 
           if git diff --cached --quiet; then
-            echo ""
             echo "No changes to README."
             exit 0
           fi
 
-          git commit -m "chore: update repository contribution counts"
-
+          git commit -m "chore: update commit counts"
           git push
-
-          echo ""
-          echo "========================================"
-          echo "WORKFLOW COMPLETED SUCCESSFULLY"
-          echo "========================================"
