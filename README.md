@@ -103,16 +103,7 @@ A full-stack platform that connects students to relevant job and internship oppo
 
 ---
 
-## 📊 GitHub Stats
-
-<p align="center">
-  <img src="https://github-readme-stats.vercel.app/api?username=Shivam07042004&show_icons=true&theme=tokyonight&hide_border=true" height="165"/>
-  <img src="https://github-readme-stats.vercel.app/api/top-langs/?username=Shivam07042004&layout=compact&theme=tokyonight&hide_border=true" height="165"/>
-</p>
-
----
-
-## 📊 Contributions (live)
+## 📊 GitHub Stats Contributions (live)
 
 📝 Total commits: <!--TOTAL_COMMITS_COUNT-->473<!--END_TOTAL_COMMITS_COUNT-->
 
