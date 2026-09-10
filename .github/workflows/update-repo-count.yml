@@ -6,6 +6,7 @@ on:
 jobs:
   update:
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v4
         with:
@@ -22,30 +23,71 @@ jobs:
           echo "GitHub Contribution Counter"
           echo "========================================"
           echo "User: $USERNAME"
-          echo "From: 2025-10-01"
+          echo "From: 2021-01-01"
           echo "To: today"
           echo ""
 
-          gh api graphql \
-            -f login="$USERNAME" \
-            -f from="2025-10-01T00:00:00Z" \
-            -f to="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-            -f query='query($login:String!,$from:DateTime!,$to:DateTime!){user(login:$login){login contributionsCollection(from:$from,to:$to){commitContributionsByRepository{repository{nameWithOwner isPrivate} contributions{totalCount}}}}}' \
-            > contributions.json
+          rm -f /tmp/year-*.json
 
-          echo "GraphQL response:"
-          cat contributions.json
+          CURRENT_YEAR=$(date -u +%Y)
+
+          for YEAR in $(seq 2021 "$CURRENT_YEAR"); do
+
+            FROM="${YEAR}-01-01T00:00:00Z"
+
+            if [ "$YEAR" -eq "$CURRENT_YEAR" ]; then
+              TO="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            else
+              TO="$((YEAR + 1))-01-01T00:00:00Z"
+            fi
+
+            echo "Checking year: $YEAR"
+
+            gh api graphql \
+              -f login="$USERNAME" \
+              -f from="$FROM" \
+              -f to="$TO" \
+              -f query='query($login:String!,$from:DateTime!,$to:DateTime!){user(login:$login){contributionsCollection(from:$from,to:$to){commitContributionsByRepository{repository{nameWithOwner isPrivate} contributions{totalCount}}}}}' \
+              > "/tmp/year-${YEAR}.json"
+
+            if jq -e '.errors' "/tmp/year-${YEAR}.json" >/dev/null; then
+              echo "GraphQL error for year $YEAR:"
+              jq '.errors' "/tmp/year-${YEAR}.json"
+              exit 1
+            fi
+
+          done
+
           echo ""
+          echo "========================================"
+          echo "Combining repository data"
+          echo "========================================"
 
-          if jq -e '.errors' contributions.json >/dev/null; then
-            echo "GraphQL error:"
-            jq '.errors' contributions.json
-            exit 1
-          fi
+          jq -s '
+            map(
+              .data.user.contributionsCollection.commitContributionsByRepository[]
+            )
+          ' /tmp/year-*.json > /tmp/all_contributions.json
 
-          PUBLIC_COUNT=$(jq '[.data.user.contributionsCollection.commitContributionsByRepository[] | select(.repository.isPrivate == false) | .repository.nameWithOwner] | unique | length' contributions.json)
+          PUBLIC_COUNT=$(jq '
+            [
+              .[]
+              | select(.repository.isPrivate == false)
+              | .repository.nameWithOwner
+            ]
+            | unique
+            | length
+          ' /tmp/all_contributions.json)
 
-          PRIVATE_COUNT=$(jq '[.data.user.contributionsCollection.commitContributionsByRepository[] | select(.repository.isPrivate == true) | .repository.nameWithOwner] | unique | length' contributions.json)
+          PRIVATE_COUNT=$(jq '
+            [
+              .[]
+              | select(.repository.isPrivate == true)
+              | .repository.nameWithOwner
+            ]
+            | unique
+            | length
+          ' /tmp/all_contributions.json)
 
           echo ""
           echo "========================================"
@@ -75,4 +117,5 @@ jobs:
           fi
 
           git commit -m "chore: update repository contribution counts"
+
           git push
