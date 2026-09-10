@@ -50,10 +50,11 @@ jobs:
               -f login="$USERNAME" \
               -f from="$FROM" \
               -f to="$TO" \
-              -f query='query($login:String!,$from:DateTime!,$to:DateTime!){user(login:$login){contributionsCollection(from:$from,to:$to){commitContributionsByRepository{repository{nameWithOwner isPrivate} contributions{totalCount}}}}}' \
+              -f query='query($login:String!,$from:DateTime!,$to:DateTime!){user(login:$login){login contributionsCollection(from:$from,to:$to){commitContributionsByRepository{repository{nameWithOwner isPrivate} contributions{totalCount}}}}}' \
               > "/tmp/year-${YEAR}.json"
 
             if jq -e '.errors' "/tmp/year-${YEAR}.json" >/dev/null; then
+              echo ""
               echo "GraphQL error for year $YEAR:"
               jq '.errors' "/tmp/year-${YEAR}.json"
               exit 1
@@ -71,6 +72,21 @@ jobs:
               .data.user.contributionsCollection.commitContributionsByRepository[]
             )
           ' /tmp/year-*.json > /tmp/all_contributions.json
+
+          echo ""
+          echo "========================================"
+          echo "ALL REPOSITORIES RETURNED BY GITHUB"
+          echo "========================================"
+
+          jq -r '
+            .[]
+            | "\(.repository.nameWithOwner) | private=\(.repository.isPrivate) | commits=\(.contributions.totalCount)"
+          ' /tmp/all_contributions.json
+
+          echo ""
+          echo "========================================"
+          echo "COUNTING UNIQUE REPOSITORIES"
+          echo "========================================"
 
           PUBLIC_COUNT=$(jq '
             [
@@ -98,6 +114,7 @@ jobs:
           echo "========================================"
           echo "Public repositories:  $PUBLIC_COUNT"
           echo "Private repositories: $PRIVATE_COUNT"
+          echo "Total repositories:   $((PUBLIC_COUNT + PRIVATE_COUNT))"
           echo "========================================"
 
           sed -i "s/<!--PRIVATE_REPOS_COUNT-->.*<!--END_PRIVATE_REPOS_COUNT-->/<!--PRIVATE_REPOS_COUNT-->${PRIVATE_COUNT}<!--END_PRIVATE_REPOS_COUNT-->/" README.md
@@ -115,7 +132,8 @@ jobs:
           git add README.md
 
           if git diff --cached --quiet; then
-            echo "No changes."
+            echo ""
+            echo "No changes to README."
             exit 0
           fi
 
