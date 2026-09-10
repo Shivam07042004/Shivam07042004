@@ -114,7 +114,7 @@ A full-stack platform that connects students to relevant job and internship oppo
 
 ## Contributions (live)
 
-🔒 Private repositories contributed to: <!--PRIVATE_REPOS_COUNT-->0<!--END_PRIVATE_REPOS_COUNT-->
+🔒 Private repositories contributed to: <!--PRIVATE_REPOS_COUNT-->25<!--END_PRIVATE_REPOS_COUNT-->
 🌐 Public repositories contributed to: <!--PUBLIC_REPOS_COUNT-->24<!--END_PUBLIC_REPOS_COUNT-->
 
 ---
