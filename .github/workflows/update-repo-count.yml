@@ -11,120 +11,292 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      # ---------------------------------------------------------
+      # Checkout repository
+      # ---------------------------------------------------------
+      - name: Checkout repository
+        uses: actions/checkout@v4
         with:
           token: ${{ github.token }}
 
-      - name: Count repositories
+      # ---------------------------------------------------------
+      # Count repositories
+      # ---------------------------------------------------------
+      - name: Count repository contributions
         env:
           USERNAME: Shivam07042004
           GH_TOKEN: ${{ secrets.PERSONAL_TOKEN }}
+        shell: bash
         run: |
-          set -e
+          set -euo pipefail
 
           echo "========================================"
           echo "GitHub Contribution Counter"
           echo "========================================"
-          echo "User: $USERNAME"
+          echo "Target user: $USERNAME"
           echo "From: 2021-01-01"
           echo "To: today"
           echo ""
 
-          rm -f /tmp/year-*.json
+          # -------------------------------------------------------
+          # Verify that PERSONAL_TOKEN belongs to the expected user
+          # -------------------------------------------------------
 
-          CURRENT_YEAR=$(date -u +%Y)
+          echo "========================================"
+          echo "VERIFYING PERSONAL TOKEN"
+          echo "========================================"
 
-          for YEAR in $(seq 2021 "$CURRENT_YEAR"); do
+          AUTH_USER=$(gh api user --jq '.login')
 
-            FROM="${YEAR}-01-01T00:00:00Z"
+          echo "Authenticated GitHub account: $AUTH_USER"
 
-            if [ "$YEAR" -eq "$CURRENT_YEAR" ]; then
-              TO="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          if [ "$AUTH_USER" != "$USERNAME" ]; then
+            echo ""
+            echo "ERROR:"
+            echo "PERSONAL_TOKEN belongs to: $AUTH_USER"
+            echo "Expected: $USERNAME"
+            echo ""
+            echo "Please make sure PERSONAL_TOKEN contains"
+            echo "the PAT created for $USERNAME."
+            exit 1
+          fi
+
+          echo "Token authentication: OK"
+          echo ""
+
+          # -------------------------------------------------------
+          # Dates
+          # -------------------------------------------------------
+
+          FROM_DATE="2021-01-01T00:00:00Z"
+          TO_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+          # Temporary files
+          rm -f /tmp/repos.json
+          rm -f /tmp/contributed_repos.json
+
+          echo "========================================"
+          echo "FETCHING PRIVATE REPOSITORIES"
+          echo "========================================"
+
+          # -------------------------------------------------------
+          # First verify that the PAT can actually see private repos
+          # -------------------------------------------------------
+
+          gh api --paginate \
+            "/user/repos?visibility=private&affiliation=owner&per_page=100" \
+            --jq '.[] | {
+              full_name: .full_name,
+              private: .private
+            }' \
+            | jq -s '.' > /tmp/private_repos.json
+
+          PRIVATE_VISIBLE=$(jq 'length' /tmp/private_repos.json)
+
+          echo "Private repositories visible to PAT: $PRIVATE_VISIBLE"
+          echo ""
+
+          if [ "$PRIVATE_VISIBLE" -gt 0 ]; then
+            echo "Private repositories accessible by token:"
+            jq -r '.[].full_name' /tmp/private_repos.json
+          else
+            echo "WARNING: No private repositories are visible to PERSONAL_TOKEN."
+            echo ""
+            echo "Check that:"
+            echo "1. PERSONAL_TOKEN contains the correct PAT."
+            echo "2. The PAT has access to your private repositories."
+            echo "3. The repositories are actually owned by $USERNAME."
+          fi
+
+          echo ""
+
+          # -------------------------------------------------------
+          # Fetch ALL repositories accessible to the authenticated
+          # user.
+          #
+          # affiliation:
+          # owner
+          # collaborator
+          # organization_member
+          # -------------------------------------------------------
+
+          echo "========================================"
+          echo "FETCHING ALL ACCESSIBLE REPOSITORIES"
+          echo "========================================"
+
+          gh api --paginate \
+            "/user/repos?affiliation=owner,collaborator,organization_member&visibility=all&per_page=100" \
+            --jq '.[] | {
+              full_name: .full_name,
+              private: .private,
+              owner: .owner.login
+            }' \
+            | jq -s 'unique_by(.full_name)' > /tmp/repos.json
+
+          TOTAL_VISIBLE=$(jq 'length' /tmp/repos.json)
+
+          echo "Total repositories visible to token: $TOTAL_VISIBLE"
+          echo ""
+
+          # -------------------------------------------------------
+          # Initialize contribution file
+          # -------------------------------------------------------
+
+          echo "[]" > /tmp/contributed_repos.json
+
+          echo "========================================"
+          echo "CHECKING COMMITS"
+          echo "========================================"
+          echo ""
+
+          # -------------------------------------------------------
+          # Check every repository for commits by USERNAME
+          # between FROM_DATE and TO_DATE.
+          # -------------------------------------------------------
+
+          jq -c '.[]' /tmp/repos.json | while read -r REPO; do
+
+            FULL_NAME=$(echo "$REPO" | jq -r '.full_name')
+            IS_PRIVATE=$(echo "$REPO" | jq -r '.private')
+
+            echo "Checking: $FULL_NAME"
+
+            # Fetch commits authored by the user.
+            #
+            # --paginate handles repositories with >100 commits.
+            #
+            # The GitHub commits endpoint accepts username as
+            # the "author" parameter.
+            # -----------------------------------------------------
+
+            COMMIT_COUNT=$(
+              gh api --paginate \
+                "/repos/${FULL_NAME}/commits?author=${USERNAME}&since=${FROM_DATE}&until=${TO_DATE}&per_page=100" \
+                --jq '.[].sha' 2>/dev/null \
+                | wc -l
+            )
+
+            # Remove whitespace from wc output
+            COMMIT_COUNT=$(echo "$COMMIT_COUNT" | tr -d ' ')
+
+            if [ "$COMMIT_COUNT" -gt 0 ]; then
+
+              echo "  -> $COMMIT_COUNT commits"
+
+              jq \
+                --arg full_name "$FULL_NAME" \
+                --argjson private "$IS_PRIVATE" \
+                --argjson commits "$COMMIT_COUNT" \
+                '. + [{
+                  full_name: $full_name,
+                  private: $private,
+                  commits: $commits
+                }]' \
+                /tmp/contributed_repos.json \
+                > /tmp/contributed_repos.tmp
+
+              mv /tmp/contributed_repos.tmp /tmp/contributed_repos.json
+
             else
-              TO="$((YEAR + 1))-01-01T00:00:00Z"
-            fi
-
-            echo "Checking year: $YEAR"
-
-            gh api graphql \
-              -f login="$USERNAME" \
-              -f from="$FROM" \
-              -f to="$TO" \
-              -f query='query($login:String!,$from:DateTime!,$to:DateTime!){user(login:$login){login contributionsCollection(from:$from,to:$to){commitContributionsByRepository{repository{nameWithOwner isPrivate} contributions{totalCount}}}}}' \
-              > "/tmp/year-${YEAR}.json"
-
-            if jq -e '.errors' "/tmp/year-${YEAR}.json" >/dev/null; then
-              echo ""
-              echo "GraphQL error for year $YEAR:"
-              jq '.errors' "/tmp/year-${YEAR}.json"
-              exit 1
+              echo "  -> 0 commits"
             fi
 
           done
 
           echo ""
+
+          # -------------------------------------------------------
+          # Display all repositories where user contributed
+          # -------------------------------------------------------
+
           echo "========================================"
-          echo "Combining repository data"
+          echo "REPOSITORIES WITH YOUR COMMITS"
           echo "========================================"
 
-          jq -s '
-            map(
-              .data.user.contributionsCollection.commitContributionsByRepository[]
-            )
-          ' /tmp/year-*.json > /tmp/all_contributions.json
+          CONTRIBUTED_COUNT=$(jq 'length' /tmp/contributed_repos.json)
+
+          echo "Repositories with commits: $CONTRIBUTED_COUNT"
+          echo ""
+
+          if [ "$CONTRIBUTED_COUNT" -gt 0 ]; then
+            jq -r '
+              .[]
+              | "\(.full_name) | private=\(.private) | commits=\(.commits)"
+            ' /tmp/contributed_repos.json
+          else
+            echo "No repositories found with commits."
+          fi
 
           echo ""
-          echo "========================================"
-          echo "ALL REPOSITORIES RETURNED BY GITHUB"
-          echo "========================================"
 
-          jq -r '
-            .[]
-            | "\(.repository.nameWithOwner) | private=\(.repository.isPrivate) | commits=\(.contributions.totalCount)"
-          ' /tmp/all_contributions.json
-
-          echo ""
-          echo "========================================"
-          echo "COUNTING UNIQUE REPOSITORIES"
-          echo "========================================"
+          # -------------------------------------------------------
+          # Count unique PUBLIC repositories
+          # -------------------------------------------------------
 
           PUBLIC_COUNT=$(jq '
             [
               .[]
-              | select(.repository.isPrivate == false)
-              | .repository.nameWithOwner
+              | select(.private == false)
+              | .full_name
             ]
             | unique
             | length
-          ' /tmp/all_contributions.json)
+          ' /tmp/contributed_repos.json)
+
+          # -------------------------------------------------------
+          # Count unique PRIVATE repositories
+          # -------------------------------------------------------
 
           PRIVATE_COUNT=$(jq '
             [
               .[]
-              | select(.repository.isPrivate == true)
-              | .repository.nameWithOwner
+              | select(.private == true)
+              | .full_name
             ]
             | unique
             | length
-          ' /tmp/all_contributions.json)
+          ' /tmp/contributed_repos.json)
+
+          TOTAL_COUNT=$((PUBLIC_COUNT + PRIVATE_COUNT))
+
+          # -------------------------------------------------------
+          # Final result
+          # -------------------------------------------------------
 
           echo ""
           echo "========================================"
-          echo "RESULT"
+          echo "FINAL RESULT"
           echo "========================================"
           echo "Public repositories:  $PUBLIC_COUNT"
           echo "Private repositories: $PRIVATE_COUNT"
-          echo "Total repositories:   $((PUBLIC_COUNT + PRIVATE_COUNT))"
+          echo "Total repositories:   $TOTAL_COUNT"
+          echo "========================================"
+          echo ""
+
+          # -------------------------------------------------------
+          # Update README
+          # -------------------------------------------------------
+
+          echo "========================================"
+          echo "UPDATING README"
           echo "========================================"
 
-          sed -i "s/<!--PRIVATE_REPOS_COUNT-->.*<!--END_PRIVATE_REPOS_COUNT-->/<!--PRIVATE_REPOS_COUNT-->${PRIVATE_COUNT}<!--END_PRIVATE_REPOS_COUNT-->/" README.md
+          sed -i \
+            "s/<!--PRIVATE_REPOS_COUNT-->.*<!--END_PRIVATE_REPOS_COUNT-->/<!--PRIVATE_REPOS_COUNT-->${PRIVATE_COUNT}<!--END_PRIVATE_REPOS_COUNT-->/" \
+            README.md
 
-          sed -i "s/<!--PUBLIC_REPOS_COUNT-->.*<!--END_PUBLIC_REPOS_COUNT-->/<!--PUBLIC_REPOS_COUNT-->${PUBLIC_COUNT}<!--END_PUBLIC_REPOS_COUNT-->/" README.md
+          sed -i \
+            "s/<!--PUBLIC_REPOS_COUNT-->.*<!--END_PUBLIC_REPOS_COUNT-->/<!--PUBLIC_REPOS_COUNT-->${PUBLIC_COUNT}<!--END_PUBLIC_REPOS_COUNT-->/" \
+            README.md
 
           echo ""
-          echo "README updated:"
+          echo "README values:"
           grep "PRIVATE_REPOS_COUNT" README.md
           grep "PUBLIC_REPOS_COUNT" README.md
+
+          # -------------------------------------------------------
+          # Commit changes
+          # -------------------------------------------------------
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -140,3 +312,8 @@ jobs:
           git commit -m "chore: update repository contribution counts"
 
           git push
+
+          echo ""
+          echo "========================================"
+          echo "DONE"
+          echo "========================================"
