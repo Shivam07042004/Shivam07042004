@@ -11,24 +11,24 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # ---------------------------------------------------------
-      # Checkout repository
-      # ---------------------------------------------------------
+      # ==========================================================
+      # Checkout profile repository
+      # ==========================================================
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           token: ${{ github.token }}
 
-      # ---------------------------------------------------------
+      # ==========================================================
       # Count repositories
-      # ---------------------------------------------------------
+      # ==========================================================
       - name: Count repository contributions
         env:
           USERNAME: Shivam07042004
           GH_TOKEN: ${{ secrets.PERSONAL_TOKEN }}
         shell: bash
         run: |
-          set -euo pipefail
+          set -uo pipefail
 
           echo "========================================"
           echo "GitHub Contribution Counter"
@@ -38,50 +38,45 @@ jobs:
           echo "To: today"
           echo ""
 
-          # -------------------------------------------------------
-          # Verify that PERSONAL_TOKEN belongs to the expected user
-          # -------------------------------------------------------
+          FROM_DATE="2021-01-01T00:00:00Z"
+          TO_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+          rm -f /tmp/repos.json
+          rm -f /tmp/private_repos.json
+          rm -f /tmp/contributed_repos.json
+
+          # ========================================================
+          # Verify token
+          # ========================================================
 
           echo "========================================"
           echo "VERIFYING PERSONAL TOKEN"
           echo "========================================"
 
-          AUTH_USER=$(gh api user --jq '.login')
+          AUTH_USER=$(gh api user --jq '.login' 2>/dev/null)
 
           echo "Authenticated GitHub account: $AUTH_USER"
 
           if [ "$AUTH_USER" != "$USERNAME" ]; then
             echo ""
-            echo "ERROR:"
-            echo "PERSONAL_TOKEN belongs to: $AUTH_USER"
-            echo "Expected: $USERNAME"
+            echo "ERROR: PERSONAL_TOKEN belongs to:"
+            echo "$AUTH_USER"
             echo ""
-            echo "Please make sure PERSONAL_TOKEN contains"
-            echo "the PAT created for $USERNAME."
+            echo "Expected:"
+            echo "$USERNAME"
             exit 1
           fi
 
           echo "Token authentication: OK"
           echo ""
 
-          # -------------------------------------------------------
-          # Dates
-          # -------------------------------------------------------
-
-          FROM_DATE="2021-01-01T00:00:00Z"
-          TO_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-
-          # Temporary files
-          rm -f /tmp/repos.json
-          rm -f /tmp/contributed_repos.json
+          # ========================================================
+          # Check private repositories
+          # ========================================================
 
           echo "========================================"
           echo "FETCHING PRIVATE REPOSITORIES"
           echo "========================================"
-
-          # -------------------------------------------------------
-          # First verify that the PAT can actually see private repos
-          # -------------------------------------------------------
 
           gh api --paginate \
             "/user/repos?visibility=private&affiliation=owner&per_page=100" \
@@ -99,26 +94,13 @@ jobs:
           if [ "$PRIVATE_VISIBLE" -gt 0 ]; then
             echo "Private repositories accessible by token:"
             jq -r '.[].full_name' /tmp/private_repos.json
-          else
-            echo "WARNING: No private repositories are visible to PERSONAL_TOKEN."
-            echo ""
-            echo "Check that:"
-            echo "1. PERSONAL_TOKEN contains the correct PAT."
-            echo "2. The PAT has access to your private repositories."
-            echo "3. The repositories are actually owned by $USERNAME."
           fi
 
           echo ""
 
-          # -------------------------------------------------------
-          # Fetch ALL repositories accessible to the authenticated
-          # user.
-          #
-          # affiliation:
-          # owner
-          # collaborator
-          # organization_member
-          # -------------------------------------------------------
+          # ========================================================
+          # Fetch all repositories
+          # ========================================================
 
           echo "========================================"
           echo "FETCHING ALL ACCESSIBLE REPOSITORIES"
@@ -138,46 +120,71 @@ jobs:
           echo "Total repositories visible to token: $TOTAL_VISIBLE"
           echo ""
 
-          # -------------------------------------------------------
-          # Initialize contribution file
-          # -------------------------------------------------------
+          # ========================================================
+          # Initialize result file
+          # ========================================================
 
           echo "[]" > /tmp/contributed_repos.json
+
+          # ========================================================
+          # Check commits
+          # ========================================================
 
           echo "========================================"
           echo "CHECKING COMMITS"
           echo "========================================"
           echo ""
 
-          # -------------------------------------------------------
-          # Check every repository for commits by USERNAME
-          # between FROM_DATE and TO_DATE.
-          # -------------------------------------------------------
-
-          jq -c '.[]' /tmp/repos.json | while read -r REPO; do
+          while IFS= read -r REPO; do
 
             FULL_NAME=$(echo "$REPO" | jq -r '.full_name')
             IS_PRIVATE=$(echo "$REPO" | jq -r '.private')
 
             echo "Checking: $FULL_NAME"
 
-            # Fetch commits authored by the user.
+            # ------------------------------------------------------
+            # IMPORTANT:
             #
-            # --paginate handles repositories with >100 commits.
+            # Some GitHub repositories can return errors such as:
             #
-            # The GitHub commits endpoint accepts username as
-            # the "author" parameter.
-            # -----------------------------------------------------
+            # 409 Repository is empty
+            # 404 No commits
+            # 409 Git Repository is empty
+            #
+            # We don't want one such repository to terminate the
+            # entire workflow.
+            # ------------------------------------------------------
 
-            COMMIT_COUNT=$(
-              gh api --paginate \
+            TEMP_COMMITS="/tmp/commits.json"
+
+            rm -f "$TEMP_COMMITS"
+
+            if gh api --paginate \
                 "/repos/${FULL_NAME}/commits?author=${USERNAME}&since=${FROM_DATE}&until=${TO_DATE}&per_page=100" \
-                --jq '.[].sha' 2>/dev/null \
-                | wc -l
-            )
+                > "$TEMP_COMMITS" 2>/tmp/gh_error.txt; then
 
-            # Remove whitespace from wc output
-            COMMIT_COUNT=$(echo "$COMMIT_COUNT" | tr -d ' ')
+              COMMIT_COUNT=$(jq -s '
+                map(.[])
+                | length
+              ' "$TEMP_COMMITS" 2>/dev/null || echo "0")
+
+            else
+
+              echo "  -> GitHub API returned an error"
+              echo "  -> Treating as 0 commits"
+
+              if [ -s /tmp/gh_error.txt ]; then
+                ERROR_MESSAGE=$(head -c 300 /tmp/gh_error.txt)
+                echo "  -> $ERROR_MESSAGE"
+              fi
+
+              COMMIT_COUNT=0
+            fi
+
+            # Make sure count is numeric
+            if ! [[ "$COMMIT_COUNT" =~ ^[0-9]+$ ]]; then
+              COMMIT_COUNT=0
+            fi
 
             if [ "$COMMIT_COUNT" -gt 0 ]; then
 
@@ -201,13 +208,13 @@ jobs:
               echo "  -> 0 commits"
             fi
 
-          done
+            echo ""
 
-          echo ""
+          done < <(jq -c '.[]' /tmp/repos.json)
 
-          # -------------------------------------------------------
-          # Display all repositories where user contributed
-          # -------------------------------------------------------
+          # ========================================================
+          # Display repositories with contributions
+          # ========================================================
 
           echo "========================================"
           echo "REPOSITORIES WITH YOUR COMMITS"
@@ -229,9 +236,9 @@ jobs:
 
           echo ""
 
-          # -------------------------------------------------------
-          # Count unique PUBLIC repositories
-          # -------------------------------------------------------
+          # ========================================================
+          # Count PUBLIC repositories
+          # ========================================================
 
           PUBLIC_COUNT=$(jq '
             [
@@ -243,9 +250,9 @@ jobs:
             | length
           ' /tmp/contributed_repos.json)
 
-          # -------------------------------------------------------
-          # Count unique PRIVATE repositories
-          # -------------------------------------------------------
+          # ========================================================
+          # Count PRIVATE repositories
+          # ========================================================
 
           PRIVATE_COUNT=$(jq '
             [
@@ -259,9 +266,9 @@ jobs:
 
           TOTAL_COUNT=$((PUBLIC_COUNT + PRIVATE_COUNT))
 
-          # -------------------------------------------------------
+          # ========================================================
           # Final result
-          # -------------------------------------------------------
+          # ========================================================
 
           echo ""
           echo "========================================"
@@ -273,9 +280,9 @@ jobs:
           echo "========================================"
           echo ""
 
-          # -------------------------------------------------------
+          # ========================================================
           # Update README
-          # -------------------------------------------------------
+          # ========================================================
 
           echo "========================================"
           echo "UPDATING README"
@@ -294,9 +301,9 @@ jobs:
           grep "PRIVATE_REPOS_COUNT" README.md
           grep "PUBLIC_REPOS_COUNT" README.md
 
-          # -------------------------------------------------------
+          # ========================================================
           # Commit changes
-          # -------------------------------------------------------
+          # ========================================================
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -315,5 +322,5 @@ jobs:
 
           echo ""
           echo "========================================"
-          echo "DONE"
+          echo "WORKFLOW COMPLETED SUCCESSFULLY"
           echo "========================================"
