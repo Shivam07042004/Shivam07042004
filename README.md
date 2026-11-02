@@ -18,7 +18,7 @@
 
 ## 🧠 About Me
 
-I'm a software engineer passionate about **GenAI, agentic systems, and backend engineering**. Currently at **Deloitte**, I build AI agents using **Google ADK** and orchestrate multi-agent workflow[...]
+I'm a software engineer passionate about **GenAI, agentic systems, and backend engineering**. Currently at **Deloitte**, I build AI agents using **Google ADK** and orchestrate multi-agent workflows.
 
 - 🤖 Building **agentic AI workflows** at Deloitte using Django & Google Gemini
 - 🐍 Backend engineering with **Python, Django & Django REST Framework**
@@ -33,16 +33,15 @@ I'm a software engineer passionate about **GenAI, agentic systems, and backend e
 ### 🏢 Deloitte — Analyst (Software AI Developer)
 📅 *July 2025 – Present* &nbsp;|&nbsp; 📍 Hyderabad, India
 
-> Developing AI-powered backend systems using Django and Google Gemini, designing phased agentic workflows that bring intelligence into real engineering pipelines.
+> Building and optimizing enterprise GenAI workflows and backend services, with a focus on response quality, performance, secure document processing, and maintainable architecture.
 
-- 🔧 **Backend development with Django** — writing services and REST APIs that power AI-driven features and serve results to end users
-- 🧠 **Integrated Google Gemini** to build phased, agentic workflows where each phase uses the model for reasoning, generation, or decision-making
-- ⚙️ Designed **multi-phase AI workflows** that automate routine engineering tasks end-to-end, cutting manual effort by an estimated **~60%**
-- 🗣️ **Coordinated with multiple internal project teams** — understood their requirements, gathered use cases, and built tailored AI agents for their specific needs
-- 📢 **Delivered product demos** to different project teams, showcasing capabilities and collecting feedback to drive improvements
-- 🤝 Collaborated in a cross-functional agile team, coordinating tasks and delivering features on schedule
+- 🧠 **GenAI workflow migration** — upgraded internal enterprise workflows by migrating LLM orchestration to **Google ADK calls and custom skills**, improving response data accuracy from **50% to 90%**
+- ⚡ **Backend performance tuning** — built asynchronous pipelines with `ThreadPoolExecutor`, reducing API latency by **60%** under peak loads for **500–1,000 active internal users**
+- 📄 **Lossless file ingestion** — optimized secure file-processing pipelines, including `fileUri` handling, to prevent data loss during large-scale document transfers to LLMs
+- 🏗️ **System architecture refactoring** — partnered with senior architects to refactor core microservices, eliminate structural redundancies, and improve backend maintainability
+- 🔐 **Access control and feedback loops** — implemented three-tier role-based access control (**Super User, Admin, User**) and closed-loop user feedback mechanisms, improving AI response relevance by approximately **25%**
 
-**Stack:** `Python` · `Django` · `Django REST Framework` · `Google Gemini` · `Agentic Workflows`
+**Stack:** `Python` · `Django` · `Django REST Framework` · `Google ADK` · `Google Gemini` · `ThreadPoolExecutor` · `Agentic Workflows`
 
 ---
 
